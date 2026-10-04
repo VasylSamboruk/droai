@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#edf1e9" />
+    <title>Drone AI | Field Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="wordmark" href="/" aria-label="Drone AI home">
+          <span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span>DRONE<span class="wordmark-light"> / VISION</span></span>
+        </a>
+        <div class="session-label"><span class="status-dot" id="status-dot"></span><span id="connection-state">CONNECTING</span><span class="session-divider"></span><span>PC TEST STATION</span></div>
+        <div class="clock" id="clock">--:--:--</div>
+      </header>
+
+      <main>
+        <section class="page-heading">
+          <div>
+            <p class="eyebrow">PERCEPTION / LIVE</p>
+            <h1>Traffic tracking</h1>
+          </div>
+          <div class="model-chip"><span class="chip-kicker">MODEL</span><span id="model-name">vehicle.pt</span></div>
+        </section>
+
+        <section class="control-strip" aria-label="Playback controls">
+          <div class="transport-controls">
+            <button class="button button-primary" id="start-button" type="button"><span class="button-icon" aria-hidden="true">▶</span>Start</button>
+            <button class="button button-secondary" id="pause-button" type="button"><span class="button-icon" aria-hidden="true">Ⅱ</span>Pause</button>
+            <button class="button button-quiet" id="restart-button" type="button"><span class="button-icon restart-icon" aria-hidden="true">↺</span>Restart</button>
+          </div>
+          <div class="control-divider"></div>
+          <label class="toggle-control"><input id="ai-toggle" type="checkbox" checked /><span class="toggle-track"></span><span class="toggle-label">AI inference</span></label>
+          <span class="control-spacer"></span>
+          <span class="record-indicator"><i></i>OUTPUT RECORDING</span>
+        </section>
+
+        <section class="workspace-grid">
+          <section class="video-panel" aria-label="Live video">
+            <div class="panel-heading">
+              <div class="panel-title"><span class="live-mark"></span><h2>Live preview</h2></div>
+              <span class="feed-resolution" id="feed-resolution">WAITING FOR VIDEO</span>
+            </div>
+            <div class="video-stage">
+              <img id="video-feed" src="/video_feed" alt="Live video with object detection overlay" />
+              <div class="empty-state" id="empty-state">
+                <div class="empty-crosshair" aria-hidden="true"><span></span><i></i></div>
+                <strong>Waiting for source</strong>
+                <p>Add <code>input/test.mp4</code> and press Restart.</p>
+              </div>
+              <div class="video-corner corner-tl"></div><div class="video-corner corner-tr"></div>
+              <div class="video-corner corner-bl"></div><div class="video-corner corner-br"></div>
+              <span class="frame-label" id="frame-label">FRAME —</span>
+            </div>
+            <div class="video-footer">
+              <span><i class="footer-indicator"></i><span id="runtime-state">INITIALIZING</span></span>
+              <span>CAMERA SOURCE <b>FILE / LOCAL</b></span>
+              <span>OUTPUT <b>output/tracked.mp4</b></span>
+            </div>
+          </section>
+
+          <aside class="telemetry-panel" aria-label="Detection telemetry">
+            <div class="panel-heading">
+              <div class="panel-title"><h2>Telemetry</h2></div>
+              <span class="telemetry-tag">SYS 01</span>
+            </div>
+            <div class="metric-grid">
+              <article class="metric metric-main">
+                <span class="metric-label">TRACKED TARGETS</span>
+                <div class="metric-reading"><strong id="target-count">0</strong><span>objects</span></div>
+                <div class="metric-rule"><i id="target-bar"></i></div>
+              </article>
+              <article class="metric">
+                <span class="metric-label">VIDEO RATE</span>
+                <div class="metric-reading"><strong id="video-fps">0.0</strong><span>FPS</span></div>
+              </article>
+              <article class="metric">
+                <span class="metric-label">AI RATE</span>
+                <div class="metric-reading"><strong id="ai-fps">0.0</strong><span>FPS</span></div>
+              </article>
+              <article class="metric metric-candidate">
+                <span class="metric-label">WEAK CANDIDATES</span>
+                <div class="metric-reading"><strong id="candidate-count">0</strong><span>pending</span></div>
+              </article>
+              <article class="metric">
+                <span class="metric-label">ROI RECHECKS</span>
+                <div class="metric-reading"><strong id="crop-check-count">0</strong><span>crops</span></div>
+              </article>
+              <article class="metric metric-wide">
+                <span class="metric-label">TRACKING ENGINE</span>
+                <div class="metric-reading metric-engine"><strong>BoT-SORT</strong><span>GMC / sparseOptFlow</span></div>
+              </article>
+            </div>
+            <div class="error-box" id="error-box" hidden><span class="error-mark">!</span><p id="error-message"></p></div>
+            <div class="display-options">
+              <div class="options-heading"><span>OVERLAY LAYERS</span><span>VIEW</span></div>
+              <label class="option-row"><span>Candidate boxes</span><input type="checkbox" id="candidates-toggle" /><span class="checkmark"></span></label>
+              <label class="option-row"><span>Confidence score</span><input type="checkbox" id="confidence-toggle" checked /><span class="checkmark"></span></label>
+              <label class="option-row"><span>Track identifiers</span><input type="checkbox" id="ids-toggle" checked /><span class="checkmark"></span></label>
+            </div>
+            <div class="panel-bottom"><span>SESSION</span><strong>LOCAL / PC</strong><span class="bottom-spacer"></span><span class="bottom-led"></span><span>READY</span></div>
+          </aside>
+        </section>
+
+        <footer class="page-footer"><span>DRONE AI <b>·</b> PERCEPTION TEST BENCH</span><span>BoT-SORT <b>·</b> NCNN-READY CORE</span></footer>
+      </main>
+    </div>
+  </body>
+</html>

@@ -23,20 +23,38 @@ class Overlay:
         candidates: list[dict[str, Any]],
         stats: dict[str, Any],
         show_candidates: bool = False,
+        minimal_hud: bool = False,
     ) -> np.ndarray:
         output = frame.copy()
         for detection in detections:
-            self._draw_box(output, self._smooth(detection), (70, 205, 120), stats.get("show_id", True), stats.get("show_confidence", True))
+            self._draw_box(
+                output,
+                self._smooth(detection),
+                (70, 205, 120),
+                stats.get("show_id", True) and not minimal_hud,
+                stats.get("show_confidence", True) and not minimal_hud,
+                not minimal_hud,
+            )
         if show_candidates:
             for candidate in candidates:
                 color = (30, 190, 245) if candidate.get("candidate_type") == "weak" else (80, 145, 240)
-                self._draw_box(output, candidate, color, stats.get("show_id", True), stats.get("show_confidence", True))
+                self._draw_box(
+                    output,
+                    candidate,
+                    color,
+                    stats.get("show_id", True) and not minimal_hud,
+                    stats.get("show_confidence", True) and not minimal_hud,
+                    not minimal_hud,
+                )
 
-        lines = [
-            f"TARGETS {len(detections)}   CANDIDATES {len(candidates)}   ROI CHECKS {stats.get('candidate_checks', 0)}"
-        ]
-        if self.show_fps:
-            lines[:0] = [f"VIDEO {stats.get('video_fps', 0):.1f} FPS", f"AI {stats.get('ai_fps', 0):.1f} FPS"]
+        if minimal_hud:
+            lines = [f"FPS {stats.get('video_fps', 0):.0f}   MATCHES {len(detections)}"]
+        else:
+            lines = [
+                f"TARGETS {len(detections)}   CANDIDATES {len(candidates)}   ROI CHECKS {stats.get('candidate_checks', 0)}"
+            ]
+            if self.show_fps:
+                lines[:0] = [f"VIDEO {stats.get('video_fps', 0):.1f} FPS", f"AI {stats.get('ai_fps', 0):.1f} FPS"]
         for row, text in enumerate(lines):
             y = 28 + row * 24
             cv2.putText(output, text, (16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 0, 0), 4, cv2.LINE_AA)
@@ -56,9 +74,19 @@ class Overlay:
         smoothed["box"] = current
         return smoothed
 
-    def _draw_box(self, frame: np.ndarray, detection: dict[str, Any], color: tuple[int, int, int], show_id: bool, show_confidence: bool) -> None:
+    def _draw_box(
+        self,
+        frame: np.ndarray,
+        detection: dict[str, Any],
+        color: tuple[int, int, int],
+        show_id: bool,
+        show_confidence: bool,
+        show_label: bool = True,
+    ) -> None:
         x1, y1, x2, y2 = (int(value) for value in detection["box"])
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, self.thickness)
+        if not show_label:
+            return
         parts = [detection["class"]]
         if detection.get("candidate_type"):
             parts.append(detection["candidate_type"].upper())

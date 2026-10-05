@@ -8,3 +8,9 @@ output/*
 !output/.gitkeep
 models/*
 !models/.gitkeep
+!models/best.pt
+!models/yolo26n.pt
+!models/best_ncnn_model/
+!models/best_ncnn_model/**
+models/best_ncnn_model/**/__pycache__/
+models/best_ncnn_model/**/__pycache__/**

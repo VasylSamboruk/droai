@@ -11,7 +11,7 @@ class YOLODetector:
         from ultralytics import YOLO
 
         model_path = Path(model_path)
-        if not model_path.is_file():
+        if not model_path.exists():
             raise FileNotFoundError(f"Model file not found: {model_path}")
 
         self.model: Any = YOLO(str(model_path))

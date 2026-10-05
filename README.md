@@ -1,19 +1,38 @@
-# Drone AI — PC Test Bench
+# Drone AI — тестова версія для ПК
 
-PC-first test version of the drone traffic perception pipeline. The frame source is isolated in `files/video.py`; detection, candidate confirmation, tracking, and overlays consume frames without depending on how they were captured. That boundary is intended to make the later Raspberry Pi camera adapter a source replacement, not an AI rewrite.
+Тестовий стенд для розпізнавання та трекінгу транспорту з USB-вебкамери або відеофайлу. Джерело кадрів відокремлене від AI-ядра, щоб пізніше підключити камеру Raspberry Pi без переписування трекінгу.
 
-## What is included
+## Файли та призначення
 
-- Local video-file playback with Start, Pause, and Restart controls.
-- YOLO detection for configured vehicle classes.
-- Weak-candidate ROI rechecks with a configurable candidate limit.
-- BoT-SORT tracking with sparse optical-flow GMC and ReID disabled.
-- MJPEG browser preview and optional annotated MP4 recording.
-- AI and overlay toggles with live FPS and target counts.
+- `main.py` — запускає PC dashboard або Pi fullscreen VTX/Web output.
+- `config.py` — режим та параметри джерела, модель, класи, AI, трекер, overlay і запис.
+- `files/video.py` — читання відеофайлу або Picamera2 у latest-frame буфер.
+- `files/browser_video.py` — приймає JPEG-кадри з браузерної вебкамери; старі кадри замінюються новими.
+- `files/pipeline.py` — видає preview окремо від фонового AI worker.
+- `files/ai.py` — YOLO detection і повторна перевірка crop.
+- `files/candidate.py` — weak candidates, ROI crop та multi-frame confirmation.
+- `files/tracker.py` і `files/botsort.yaml` — BoT-SORT, GMC і track IDs.
+- `files/overlay.py` — рамки, класи, IDs, confidence та HUD.
+- `files/web.py` — Flask dashboard, control/status API і прийом кадрів від браузера.
+- `templates/index.html`, `static/app.js`, `static/style.css` — сторінка, керування і вигляд dashboard.
+- `models/best.pt` — вихідний custom checkpoint; `models/best_ncnn_model/` — оптимізований NCNN export для Pi 5; `models/yolo26n.pt` — старий COCO baseline.
+- `input/` — локальні відеофайли; `output/` — локальний запис і runtime tracker config.
+- `main_vtx.py` — старий Pi/VTX прототип; його fullscreen output перенесено в `main.py`.
+- `requirements.txt` — залежності PC-версії.
 
-## Setup on Windows
+У режимі webcam браузер показує камеру напряму через `<video>`; в Python надсилаються лише JPEG-кадри з частотою AI. Canvas накладає отримані рамки на плавне відео. Це дозволяє preview не чекати на YOLO.
 
-Python 3.11–3.13 are supported when a matching PyTorch wheel is available. This workspace currently uses Python 3.13.
+## Можливості
+
+- Вибір між відеофайлом, USB-вебкамерою та Picamera2.
+- Start/Pause/Restart для відеофайлу, AI та overlay-перемикачі.
+- YOLO detection, weak-candidate ROI rechecks і BoT-SORT із sparse optical-flow GMC.
+- Preview у браузері, FPS, candidate і ROI-recheck лічильники.
+- Запис file-відео; запис live-камери вимкнений за замовчуванням.
+
+## Запуск на Windows
+
+Потрібен Python 3.11–3.13 і сумісний PyTorch wheel. У цьому workspace використовується Python 3.13.
 
 ```powershell
 python -m venv .venv
@@ -22,26 +41,62 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-The project includes the official pretrained `models/yolo26n.pt` checkpoint for a baseline test. Its COCO classes include `car`, `truck`, `bus`, and `motorcycle`, but not a separate `van` class. Put test clips in `input/`; `input/test.mp4` is the default source. The app does not download weights at startup.
+Активний checkpoint: `models/best.pt`. У ньому є класи `Bus`, `Passenger car`, `Truck transport`, `bicycle`, `bus`, `car`, `lorry`, `military-vehicle` і `truck`; ці класи ввімкнені в `TARGET_CLASSES`. Назви `0`, `1`, `2`, `3` та `object` не ввімкнені, бо з checkpoint metadata незрозуміло, що вони означають. `motorcycle` у списку класів моделі немає. `models/yolo26n.pt` збережено як baseline. Під час запуску застосунок ваги не завантажує.
 
-For a later fine-tune, start from `models/yolo26n.pt`, train on your labeled datasets, then set `MODEL_PATH` in `config.py` to the resulting checkpoint and list only class names that exist in that model under `TARGET_CLASSES`.
+Для донавчання стартуй із потрібного checkpoint, навчай на розмічених датасетах, а потім задай отриманий файл у `MODEL_PATH` та вкажи в `TARGET_CLASSES` лише класи, які є в цій моделі.
 
-Ultralytics distributes YOLO under AGPL-3.0, with a separate Enterprise license available. Check the license terms before redistributing or using the model in a commercial product.
+Ultralytics YOLO поширюється під AGPL-3.0; є окрема Enterprise ліцензія. Перевір умови перед розповсюдженням або комерційним використанням.
 
-Start the local dashboard:
+Запусти dashboard:
 
 ```powershell
 python main.py
 ```
 
-Open <http://127.0.0.1:5000>. The dashboard remains available if the video or model is missing and reports the issue in the telemetry panel. Output is written to `output/tracked.mp4` when a video source is available.
+Відкрий <http://127.0.0.1:5000>. Якщо камера, відеофайл або модель недоступні, dashboard покаже помилку в telemetry.
 
-## Configuration
+## Джерело та запис
 
-Change paths, target classes, confidence thresholds, candidate limits, tracker settings, display defaults, and web binding in `config.py`. `WEB_HOST` defaults to `127.0.0.1`; change it to `0.0.0.0` only when you intentionally need access from another device on your network.
+У `config.py` задай `VIDEO_SOURCE`:
 
-BoT-SORT parameters and `gmc_method: sparseOptFlow` are in `files/botsort.yaml`. ReID is disabled. The Pi version can reuse `ai.py`, `candidate.py`, `tracker.py`, `overlay.py`, `utils.py`, `pipeline.py`, and the web assets, while replacing `VideoSource` with a Picamera2 source and using an exported NCNN model.
+- `"webcam"` — браузер безпосередньо відкриває USB-вебкамеру; пристрій вибирається у selector на панелі.
+- `"file"` — читає `INPUT_VIDEO`; за `SAVE_OUTPUT_VIDEO=True` результат пишеться в `output/tracked.mp4`.
+- `"picamera2"` — камера Raspberry Pi OS; на Windows цей режим недоступний.
 
-## Current scope
+`CAMERA_WIDTH`, `CAMERA_HEIGHT` задають бажаний розмір, `CAMERA_FPS` — бажану частоту камери, `CAMERA_AI_FPS` — частоту передачі кадрів у Python для AI. `SAVE_CAMERA_OUTPUT_VIDEO=False` залишай для live preview; запис MP4 додає навантаження. `WEB_HOST` за замовчуванням локальний; змінюй його на `0.0.0.0` лише за потреби доступу з мережі.
 
-The PC baseline uses `imgsz=960`, `track_high_thresh: 0.05`, `new_track_thresh: 0.05`, and a `0.25` direct-confirmation threshold so small aerial detections reach the candidate system. The larger image size costs more inference time than 640. Up to six candidates are checked by repeated ROI inference; these are intentionally more permissive settings than the later Pi profile. Review false positives on your footage before treating tracks as reliable. The dashboard shows the cumulative ROI recheck count. Recording follows source frame indices and duplicates the latest processed frame when inference skips input frames, preserving approximate source duration.
+BoT-SORT параметри й `gmc_method: sparseOptFlow` задаються в `files/botsort.yaml`; ReID вимкнений. Pi profile використовує цей самий AI/tracker pipeline та наявний Picamera2 adapter; Pi runtime бере NCNN export.
+
+## Поточні параметри PC
+
+Baseline використовує `imgsz=960`, tracker gates `0.05`, direct confirmation `0.25` і до шести candidate з ROI recheck. Це чутливі PC-налаштування для малих цілей; перевіряй false positives на своїх відео. Якщо AI відстає, latest-frame buffer відкидає застарілі кадри, не накопичуючи затримку.
+
+## Перенесення на Raspberry Pi 5
+
+Профіль Pi вибирається змінною середовища і не змінює PC defaults. Він використовує Picamera2, 640 px AI input, 5 AI кадрів/с, до двох слабких кандидатів, не пише MP4 і за замовчуванням показує fullscreen VTX-вікно з рамками та мінімальним HUD (`FPS`, `MATCHES`). OpenCV GUI потребує активної X11-сесії Raspberry Pi OS, так само як старий `main_vtx.py`.
+
+Перед перенесенням експортуй модель у NCNN на комп'ютері розробки або Pi:
+
+```powershell
+python -c "from ultralytics import YOLO; YOLO('models/best.pt').export(format='ncnn', imgsz=640)"
+```
+
+Скопіюй на Pi сам проєкт і весь каталог `models/best_ncnn_model/`; Windows `.venv`, локальні `input/` та `output/` копіювати не потрібно. На Pi потрібні 64-bit Raspberry Pi OS, доступний Picamera2 та OpenCV із GUI підтримкою. Запусти fullscreen output:
+
+```bash
+DRONE_PROFILE=pi5 python main.py
+```
+
+Для web-only тесту замість fullscreen:
+
+```bash
+DRONE_PROFILE=pi5 VIDEO_OUTPUT=web python main.py
+```
+
+Для одночасного fullscreen та web тесту на довіреній локальній мережі:
+
+```bash
+DRONE_PROFILE=pi5 VIDEO_OUTPUT=both WEB_HOST=0.0.0.0 python main.py
+```
+
+`both` вмикає JPEG кодування і споживає більше CPU; для польового VTX використовуйте default `vtx`. Сталі FPS і температура залежать від конкретного Pi, охолодження, камери та моделі, тому після перенесення потрібен тривалий тест. NCNN export тут налаштований, але його швидкодію та VTX-підключення потрібно підтвердити на самому Pi й вашому вже налаштованому відеовиході.

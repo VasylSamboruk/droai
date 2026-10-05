@@ -1,0 +1,33 @@
+description: Ultralytics YOLO26n model trained on /content/Drone-Targets-Merged-1/data.yaml
+author: Ultralytics
+date: '2026-10-05T01:05:05.701597+03:00'
+version: 8.4.172
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: '0'
+  1: '1'
+  2: '2'
+  3: '3'
+  4: Bus
+  5: Passenger car
+  6: Truck transport
+  7: bicycle
+  8: bus
+  9: car
+  10: lorry
+  11: military-vehicle
+  12: object
+  13: truck
+args:
+  batch: 1
+  quantize: null
+channels: 3
+end2end: false

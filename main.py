@@ -22,7 +22,15 @@ def show_vtx_output(controller: PipelineController) -> None:
             frame, frame_version = controller.get_display_frame(frame_version, timeout=0.1)
             if frame is not None:
                 cv2.imshow(window_name, frame)
-            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), ord("Q")):
+                controller.toggle_target_lock()
+            elif key in (ord("w"), ord("W")):
+                controller.cycle_target_lock()
+            elif key in (ord("t"), ord("T")):
+                status = controller.get_status()["target_lock"]
+                controller.set_target_lock_enabled(not status["enabled"])
+            elif key == 27:
                 break
     finally:
         cv2.destroyAllWindows()

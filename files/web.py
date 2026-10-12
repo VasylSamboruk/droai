@@ -53,6 +53,19 @@ def create_app(controller: PipelineController) -> Flask:
             controller.restart()
         elif action == "ai":
             controller.set_ai_enabled(bool(payload.get("enabled", False)))
+        elif action == "target-lock":
+            was_locked = controller.get_status()["target_lock"]["locked"]
+            locked = controller.toggle_target_lock()
+            if not was_locked and not locked:
+                return jsonify({"error": "No current AI detections to lock"}), 409
+        elif action == "target-lock-next":
+            if not controller.cycle_target_lock():
+                return jsonify({"error": "Lock a target and wait for at least two tracked targets"}), 409
+        elif action == "target-lock-enabled":
+            enabled = payload.get("enabled")
+            if not isinstance(enabled, bool):
+                return jsonify({"error": "Expected a boolean 'enabled' value"}), 400
+            controller.set_target_lock_enabled(enabled)
         elif action == "overlay":
             options = {
                 key: bool(payload[key])

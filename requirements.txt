@@ -3,3 +3,4 @@ numpy>=1.26
 opencv-python>=4.10,<5
 lap>=0.5.12
 ultralytics>=8.4.0
+pymavlink>=2.4.41,<3.0

@@ -14,6 +14,7 @@
 - `files/tracker.py` і `files/botsort.yaml` — BoT-SORT, GMC і track IDs.
 - `files/overlay.py` — рамки, класи, IDs, confidence та HUD.
 - `files/web.py` — Flask dashboard, control/status API і прийом кадрів від браузера.
+- `mavlink/` — окремий MAVLink-приймач телеметрії в режимі лише читання; налаштування та інструкції — у [mavlink/README.md](mavlink/README.md).
 - `templates/index.html`, `static/app.js`, `static/style.css` — сторінка, керування і вигляд dashboard.
 - `models/best.pt` — вихідний custom checkpoint; `models/best_ncnn_model/` — оптимізований NCNN export для Pi 5; `models/yolo26n.pt` — старий COCO baseline.
 - `input/` — локальні відеофайли; `output/` — локальний запис і runtime tracker config.
@@ -54,6 +55,28 @@ python main.py
 ```
 
 Відкрий <http://127.0.0.1:5000>. Якщо камера, відеофайл або модель недоступні, dashboard покаже помилку в telemetry.
+
+Для повноекранного тесту на ПК із локальним відео запусти в PowerShell:
+
+```powershell
+$env:VIDEO_SOURCE = "file"
+$env:VIDEO_OUTPUT = "vtx"
+python main.py
+```
+
+У fullscreen-вікні Q фіксує/відпускає авто з найбільшою впевненістю, T вмикає/вимикає target lock, а Esc завершує показ. Червона рамка йде за зафіксованою ціллю; у верхньому правому куті показується збільшений crop саме цього авто. Останні AI-рамки залишаються доступними між inference-оновленнями, а скидаються при вимкненні AI, помилці inference або restart джерела. Lock використовує ID BoT-SORT та оптичний потік Lucas–Kanade між AI-кадрами; якщо в кадрі немає придатних візуальних ознак, продовження стеження не гарантується.
+
+Для тесту в браузері з повноекранним переглядом:
+
+```powershell
+$env:VIDEO_SOURCE = "file"
+$env:VIDEO_OUTPUT = "web"
+python main.py
+```
+
+Відкрий <http://127.0.0.1:5000> і натисни **Fullscreen**. Q фіксує/відпускає авто, W перемикає lock на наступну підтверджену ціль за BoT-SORT ID (із циклічним переходом), T вмикає/вимикає target lock, F вмикає повний екран, Esc виходить із нього. Для W спочатку зафіксуй авто кнопкою Q; перемикання доступне, коли в кадрі є щонайменше дві цілі з track ID. Червона рамка й збільшений inset показують залочену ціль. Ті самі Q/W/T клавіші працюють у fullscreen-вікні OpenCV (режим `vtx`); Esc закриває показ.
+
+Lock є програмним трекінгом у відео. Канал 8 — утримуваний тумблер: увімкнено = lock і автопідліт у ціль, вимкнено = зняти lock і повернути стіки. Швидкість — `APPROACH_SPEED_M_S` у `config.py`. Щоб вимкнути лише автопілот і лишити lock/AI, постав `MAVLINK_APPROACH_TX = False`. Щоб увімкнути приймання телеметрії й RC-тумблерів, у PowerShell задай `$env:MAVLINK_ENABLED = "1"` і потрібний `$env:MAVLINK_CONNECTION`, потім запусти `python main.py`. Канал 8 працює як Q (зафіксувати/відпустити), канал 9 — як W (наступна ціль); кожен спрацьовує один раз при перемиканні в увімкнений стан. Номери каналів і поріг сигналу налаштовуються в секції MAVLink у `config.py`. Дані MAVLink-панелі показують лише прийнятий стан: нахил, RC-значення й за потреби налаштовану PWM-позицію FIX. Для FIX задай `MAVLINK_FIX_MODE_CHANNEL` і `MAVLINK_FIX_MODE_PWM_US` відповідно до RC-мапінгу; за замовчуванням це визначення вимкнене. Потрібно, щоб автопілот уже надсилав `RC_CHANNELS` на налаштований MAVLink-зв'язок. Автоматичного підльоту чи команд керування польотом тут немає. Деталі — у [mavlink/README.md](mavlink/README.md).
 
 ## Джерело та запис
 

@@ -39,7 +39,10 @@
           </div>
           <div class="control-divider"></div>
           <label class="toggle-control"><input id="ai-toggle" type="checkbox" checked /><span class="toggle-track"></span><span class="toggle-label">AI inference</span></label>
+          <label class="toggle-control"><input id="lock-toggle" type="checkbox" checked /><span class="toggle-track"></span><span class="toggle-label">Target lock (T)</span></label>
+          <button class="button button-secondary lock-button" id="lock-button" type="button">Lock target (Q)</button>
           <select id="browser-camera-select" class="camera-select" aria-label="Camera device" hidden></select>
+          <button class="button button-secondary fullscreen-button" id="fullscreen-button" type="button">Fullscreen</button>
           <span class="control-spacer"></span>
           <span class="record-indicator"><i></i><span id="recording-label">OUTPUT RECORDING</span></span>
         </section>
@@ -66,7 +69,8 @@
             <div class="video-footer">
               <span><i class="footer-indicator"></i><span id="runtime-state">INITIALIZING</span></span>
               <span>CAMERA SOURCE <b id="source-label">USB WEBCAM / DEVICE 0</b></span>
-              <span>OUTPUT <b>output/tracked.mp4</b></span>
+              <span>OUTPUT <b id="output-label">output/tracked.mp4</b></span>
+              <span class="keyboard-hint">Q lock · W switch target · T enable · F fullscreen</span>
             </div>
           </section>
 
@@ -100,6 +104,25 @@
               <article class="metric metric-wide">
                 <span class="metric-label">TRACKING ENGINE</span>
                 <div class="metric-reading metric-engine"><strong>BoT-SORT</strong><span>GMC / sparseOptFlow</span></div>
+              </article>
+              <article class="metric metric-wide" id="flight-telemetry">
+                <span class="metric-label">MAVLINK / FLIGHT STATE</span>
+                <div class="metric-reading metric-engine">
+                  <strong id="mavlink-state">DISABLED</strong>
+                  <span id="mavlink-attitude">ROLL — / PITCH — / YAW —</span>
+                </div>
+                <div class="metric-reading metric-engine">
+                  <span id="fix-mode-state">FIX MODE —</span>
+                  <span id="rc-input-state">RC8 — / RC9 —</span>
+                </div>
+                <div class="metric-reading metric-engine">
+                  <span id="mavlink-position">LOCAL NED —</span>
+                  <span id="mavlink-velocity">VELOCITY —</span>
+                </div>
+                <div class="metric-reading metric-engine">
+                  <span id="approach-state">AUTO TX IDLE</span>
+                  <span id="approach-compensation">PITCH COMP OFF</span>
+                </div>
               </article>
             </div>
             <div class="error-box" id="error-box" hidden><span class="error-mark">!</span><p id="error-message"></p></div>

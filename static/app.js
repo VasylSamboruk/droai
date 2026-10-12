@@ -32,8 +32,39 @@ async function sendAction(action, payload = {}) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Control request failed (${response.status})`);
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(result.error || `Control request failed (${response.status})`);
+  }
   return response.json();
+}
+
+async function toggleTargetLock() {
+  const status = await sendAction("target-lock");
+  currentStatus = status;
+  updateLockControls(status);
+}
+
+async function cycleTargetLock() {
+  const status = await sendAction("target-lock-next");
+  currentStatus = status;
+  updateLockControls(status);
+}
+
+async function toggleLockEnabled(enabled) {
+  const status = await sendAction("target-lock-enabled", { enabled });
+  currentStatus = status;
+  updateLockControls(status);
+}
+
+function updateLockControls(status) {
+  const lock = status.target_lock;
+  if (!lock) return;
+  document.querySelector("#lock-toggle").checked = Boolean(lock.enabled);
+  const button = document.querySelector("#lock-button");
+  button.textContent = lock.locked ? `Unlock #${lock.track_id ?? ""}`.trim() : "Lock target (Q)";
+  button.classList.toggle("is-locked", Boolean(lock.locked));
+  setText("#runtime-state", status.paused ? "PAUSED" : lock.locked ? `LOCKED #${lock.track_id ?? "?"}` : status.ended ? "ENDED" : status.running ? "PROCESSING" : "INITIALIZING");
 }
 
 function setText(selector, value) {
@@ -142,11 +173,11 @@ function getOverlayBox(state, now) {
 }
 
 function updateOverlay(snapshot) {
+  overlayOptions = snapshot;
   if (snapshot.version === overlayVersion && (snapshot.boxes?.length || overlayStates.size === 0)) return;
   const receivedAt = performance.now();
   const nextStates = new Map();
   overlayBoxes = snapshot.boxes || [];
-  overlayOptions = snapshot;
 
   for (const item of overlayBoxes) {
     const key = overlayKey(item);
@@ -212,6 +243,15 @@ function drawBrowserOverlay(now = performance.now()) {
     context.fillStyle = color;
     context.fillText(label, x1, Math.max(18, y1 - 6));
   }
+  const lockedTarget = overlayOptions.target_lock;
+  if (lockedTarget?.locked && Array.isArray(lockedTarget.box)) {
+    const [x1, y1, x2, y2] = lockedTarget.box.map(Number);
+    context.strokeStyle = "#ff5353";
+    context.lineWidth = Math.max(3, canvas.width / 480);
+    context.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    context.fillStyle = "#ff5353";
+    context.fillText(`LOCK${lockedTarget.track_id == null ? "" : ` #${lockedTarget.track_id}`}`, x1, Math.max(18, y1 - 8));
+  }
   context.fillStyle = "#ffffff";
   context.fillText(`LIVE ${Number(document.querySelector("#video-fps").textContent).toFixed(0)} FPS  /  AI ${Number(currentStatus?.ai_fps || 0).toFixed(1)} FPS`, 12, 22);
 }
@@ -271,6 +311,31 @@ async function refreshStatus() {
     if (status.source_type !== "webcam") setText("#video-fps", Number(status.video_fps || 0).toFixed(1));
     setText("#ai-fps", Number(status.ai_fps || 0).toFixed(1));
     setText("#model-name", status.model || "—");
+    const mavlink = status.mavlink || {};
+    setText("#mavlink-state", !status.mavlink_enabled
+      ? "DISABLED"
+      : status.mavlink_error
+        ? "ERROR"
+        : mavlink.connected
+          ? "CONNECTED"
+          : "WAITING");
+    const attitude = mavlink.attitude_deg || {};
+    const degrees = (value) => value == null ? "—" : `${Number(value).toFixed(1)}°`;
+    setText("#mavlink-attitude", `ROLL ${degrees(attitude.roll)} / PITCH ${degrees(attitude.pitch)} / YAW ${degrees(attitude.yaw)}`);
+    setText("#fix-mode-state", `FIX MODE ${mavlink.fix_mode_active == null ? "UNCONFIGURED/UNKNOWN" : mavlink.fix_mode_active ? "ON" : "OFF"}`);
+    const rcChannels = mavlink.rc_channels_raw || {};
+    setText("#rc-input-state", `RC${status.rc_target_lock_channel || 8} ${rcChannels[String(status.rc_target_lock_channel || 8)] ?? "—"} / RC${status.rc_target_cycle_channel || 9} ${rcChannels[String(status.rc_target_cycle_channel || 9)] ?? "—"}`);
+    const local = mavlink.local_position_ned || {};
+    const meters = (value) => value == null ? "—" : Number(value).toFixed(1);
+    setText("#mavlink-position", `LOCAL NED ${meters(local.x_m)} / ${meters(local.y_m)} / ${meters(local.z_m)} m`);
+    setText("#mavlink-velocity", `VEL ${meters(local.vx_m_s)} / ${meters(local.vy_m_s)} / ${meters(local.vz_m_s)} m/s`);
+    const approachTx = status.approach_tx || {};
+    setText("#approach-state", `AUTO TX ${String(approachTx.state || "IDLE").toUpperCase()}`);
+    const acro = approachTx.acro || {};
+    const compensation = acro.pitch_compensation_active
+      ? (acro.target_in_view ? "PITCH COMP ON / IN VIEW" : "PITCH COMP / OUT OF VIEW")
+      : "PITCH COMP OFF";
+    setText("#approach-compensation", compensation);
     setText("#source-label", status.source_label || status.source_type || "—");
     const sourceHelp = {
       file: `Using ${status.source_label}. Restart to replay.`,
@@ -303,6 +368,7 @@ async function refreshStatus() {
     elements.errorBox.hidden = !status.error;
     elements.errorMessage.textContent = status.error || "";
     elements.empty.classList.toggle("is-hidden", status.frame_index >= 0);
+    updateLockControls(status);
   } catch {
     elements.connection.textContent = "OFFLINE";
     elements.dot.classList.remove("is-online");
@@ -333,6 +399,47 @@ document.querySelector("#pause-button").addEventListener("click", () => sendActi
 document.querySelector("#restart-button").addEventListener("click", () => sendAction("restart").catch(showError));
 document.querySelector("#ai-toggle").addEventListener("change", (event) => {
   sendAction("ai", { enabled: event.target.checked }).catch(showError);
+});
+document.querySelector("#lock-toggle").addEventListener("change", (event) => {
+  toggleLockEnabled(event.target.checked).catch((error) => {
+    event.target.checked = !event.target.checked;
+    showError(error);
+  });
+});
+document.querySelector("#lock-button").addEventListener("click", () => {
+  toggleTargetLock().catch(showError);
+});
+document.querySelector("#fullscreen-button").addEventListener("click", async () => {
+  try {
+    const stage = document.querySelector(".video-stage");
+    if (document.fullscreenElement === stage) {
+      await document.exitFullscreen();
+    } else {
+      await stage.requestFullscreen();
+    }
+  } catch (error) {
+    showError(new Error(`Fullscreen unavailable: ${error.message}`));
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  const activeElement = document.activeElement;
+  const isEditing = activeElement instanceof HTMLElement
+    && (["INPUT", "SELECT", "TEXTAREA"].includes(activeElement.tagName) || activeElement.isContentEditable);
+  if (event.repeat || isEditing || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.code === "KeyQ") {
+    event.preventDefault();
+    toggleTargetLock().catch(showError);
+  } else if (event.code === "KeyT") {
+    event.preventDefault();
+    toggleLockEnabled(!Boolean(currentStatus?.target_lock?.enabled)).catch(showError);
+  } else if (event.code === "KeyW") {
+    event.preventDefault();
+    cycleTargetLock().catch(showError);
+  } else if (event.code === "KeyF") {
+    event.preventDefault();
+    document.querySelector("#fullscreen-button").click();
+  }
 });
 
 for (const [id, key] of [["candidates-toggle", "show_candidates"], ["confidence-toggle", "show_confidence"], ["ids-toggle", "show_ids"]]) {

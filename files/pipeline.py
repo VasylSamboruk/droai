@@ -15,6 +15,10 @@ from files.overlay import Overlay
 from files.tracker import BoTSORTTracker
 from files.utils import FPSCounter
 from files.video import VideoSource
+from NEW.target_lock import TargetLock
+from NEW.visual_approach import ApproachHoldController
+from mavlink.approach_tx import ApproachCommander
+from mavlink.telemetry import MAVLinkTelemetry
 
 
 class PipelineController:
@@ -31,6 +35,7 @@ class PipelineController:
         self._wake_worker = threading.Event()
         self._worker: threading.Thread | None = None
         self._ai_worker: threading.Thread | None = None
+        self._mavlink_worker: threading.Thread | None = None
         self._shutdown = threading.Event()
         self._restart_requested = threading.Event()
         self._desired_paused = False
@@ -53,6 +58,11 @@ class PipelineController:
         self._tracker: BoTSORTTracker | None = None
         self._candidates = self._new_candidate_manager()
         self._overlay = Overlay(config.BOX_THICKNESS, config.BOX_SMOOTHING, config.SHOW_FPS)
+        self._target_lock = TargetLock()
+        self._approach = ApproachHoldController()
+        self._mavlink_telemetry = MAVLinkTelemetry() if config.MAVLINK_ENABLED else None
+        self._rc_lock_switch_active: bool | None = None
+        self._rc_cycle_switch_active: bool | None = None
         self._writer: cv2.VideoWriter | None = None
         self._last_written_index = -1
         self._stats: dict[str, Any] = {
@@ -72,6 +82,20 @@ class PipelineController:
             "tracker": "BoT-SORT",
             "source_type": config.VIDEO_SOURCE,
             "video_output": config.VIDEO_OUTPUT,
+            "mavlink_enabled": config.MAVLINK_ENABLED,
+            "rc_target_lock_channel": config.MAVLINK_TARGET_LOCK_CHANNEL,
+            "rc_target_cycle_channel": config.MAVLINK_TARGET_CYCLE_CHANNEL,
+            "mavlink_error": None,
+            "rc_target_lock_switch_raw": None,
+            "rc_target_cycle_switch_raw": None,
+            "mavlink": {
+                "connected": False,
+                "attitude_deg": {"roll": None, "pitch": None, "yaw": None},
+                "fix_mode_active": None,
+                "rc_channels_raw": {},
+            },
+            "approach": None,
+            "approach_tx": None,
         }
         self.show_candidates = config.SHOW_CANDIDATES
         self.show_confidence = config.SHOW_CONFIDENCE
@@ -117,6 +141,89 @@ class PipelineController:
             self._ai_worker.start()
             self._worker = threading.Thread(target=self._run, name="drone-ai-pipeline", daemon=True)
             self._worker.start()
+            if self._mavlink_telemetry is not None:
+                self._mavlink_worker = threading.Thread(
+                    target=self._run_mavlink,
+                    name="drone-mavlink-telemetry",
+                    daemon=True,
+                )
+                self._mavlink_worker.start()
+
+    def _run_mavlink(self) -> None:
+        telemetry = self._mavlink_telemetry
+        if telemetry is None:
+            return
+        commander = ApproachCommander(telemetry)
+        try:
+            telemetry.connect()
+            while not self._shutdown.is_set():
+                poll_timeout = 0.05 if config.MAVLINK_APPROACH_TX else 0.5
+                telemetry.poll(timeout=poll_timeout)
+                telemetry_status = telemetry.status()
+                self._handle_rc_target_lock_switch(
+                    telemetry_status["rc_target_lock_switch_raw"],
+                    telemetry_status["rc_target_cycle_switch_raw"],
+                    telemetry_status,
+                )
+                self._sync_approach_tx(commander, telemetry_status)
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            with self._lock:
+                self._stats["mavlink_error"] = str(error)
+        finally:
+            commander.disengage()
+            with self._lock:
+                self._stats["approach_tx"] = commander.status()
+            telemetry.close()
+
+    def _sync_approach_tx(
+        self,
+        commander: ApproachCommander,
+        telemetry_status: dict[str, Any],
+    ) -> None:
+        with self._lock:
+            locked = self._target_lock.locked
+            switch_on = self._rc_lock_switch_active is True
+            approach = self._stats.get("approach")
+        setpoint = None if not isinstance(approach, dict) else approach.get("setpoint")
+        status = commander.update(
+            active=bool(locked and switch_on),
+            setpoint=setpoint if isinstance(setpoint, dict) else None,
+            telemetry_status=telemetry_status,
+            guidance=approach if isinstance(approach, dict) else None,
+        )
+        with self._lock:
+            self._stats["approach_tx"] = status
+
+    def _handle_rc_target_lock_switch(
+        self,
+        lock_raw: int | None,
+        cycle_raw: int | None,
+        telemetry_status: dict[str, Any] | None = None,
+    ) -> None:
+        with self._lock:
+            self._stats["rc_target_lock_switch_raw"] = lock_raw
+            self._stats["rc_target_cycle_switch_raw"] = cycle_raw
+            if telemetry_status is not None:
+                self._stats["mavlink"] = telemetry_status
+
+            if lock_raw is not None:
+                lock_active = lock_raw > config.MAVLINK_RC_SWITCH_THRESHOLD_US
+                was_active = self._rc_lock_switch_active
+                self._rc_lock_switch_active = lock_active
+                if lock_active:
+                    if not self._target_lock.locked:
+                        self.toggle_target_lock()
+                elif was_active is True and self._target_lock.locked:
+                    self._target_lock.clear()
+                    self._approach.reset()
+                    self._stats["approach"] = None
+
+            if cycle_raw is not None:
+                cycle_active = cycle_raw > config.MAVLINK_RC_SWITCH_THRESHOLD_US
+                cycle_pressed = cycle_active and self._rc_cycle_switch_active is not True
+                self._rc_cycle_switch_active = cycle_active
+                if cycle_pressed:
+                    self.cycle_target_lock()
 
     def _run(self) -> None:
         with self._lock:
@@ -138,6 +245,9 @@ class PipelineController:
                         self._latest_result_at = 0.0
                         self._latest_result_version += 1
                         self._stats.update(targets=0, candidates=0, candidate_checks=0)
+                        self._target_lock.clear()
+                        self._approach.reset()
+                        self._stats["approach"] = None
                         self._ai_condition.notify_all()
                     self.source = self._new_video_source()
                     self._overlay.reset()
@@ -188,10 +298,7 @@ class PipelineController:
                         self._pending_ai_frame = (generation, frame_index, frame.copy())
                         self._ai_condition.notify()
 
-                    result_is_current = (
-                        self._latest_result_generation == generation
-                        and time.monotonic() - self._latest_result_at <= 1.0
-                    )
+                    result_is_current = self._has_current_ai_result()
                     detections = list(self._latest_detections) if result_is_current else []
                     candidates = list(self._latest_candidates) if result_is_current else []
                     stats = {
@@ -201,6 +308,26 @@ class PipelineController:
                         "show_id": self.show_ids,
                         "show_confidence": self.show_confidence,
                     }
+                    target_lock = self._target_lock.update(
+                        frame,
+                        detections,
+                        self._latest_result_version,
+                    )
+                    target_lock_status = self._target_lock.status()
+                    stats["target_lock_status"] = target_lock_status
+                    if config.APPROACH_ENABLED:
+                        approach = self._approach.update(
+                            locked=target_lock is not None,
+                            box=None if target_lock is None else target_lock.get("box"),
+                            frame_size=(frame.shape[1], frame.shape[0]),
+                            class_name=None if target_lock is None else target_lock.get("class"),
+                            track_id=None if target_lock is None else target_lock.get("track_id"),
+                        )
+                    else:
+                        self._approach.reset()
+                        approach = None
+                    stats["approach"] = approach
+                    stats["approach_tx"] = self._stats.get("approach_tx")
                     self._stats.update(
                         video_fps=round(video_fps, 1),
                         targets=len(detections) if result_is_current else 0,
@@ -208,6 +335,7 @@ class PipelineController:
                         frame_index=frame_index,
                         paused=self._desired_paused,
                         ended=False,
+                        approach=approach,
                     )
                     show_candidates = self.show_candidates
 
@@ -218,6 +346,7 @@ class PipelineController:
                     stats,
                     show_candidates,
                     minimal_hud=config.VIDEO_OUTPUT in {"vtx", "both"},
+                    target_lock=target_lock,
                 )
                 with self._display_ready:
                     self._display_frame = output
@@ -331,8 +460,20 @@ class PipelineController:
                         continue
                     if detector is None:
                         self._stats["ai_enabled"] = False
+                    self._latest_detections = []
+                    self._latest_candidates = []
+                    self._latest_result_at = 0.0
+                    self._latest_result_version += 1
                     self._stats["model_loaded"] = detector is not None
+                    self._stats.update(targets=0, candidates=0)
                     self._stats["error"] = f"Inference: {error}"
+
+    def _has_current_ai_result(self) -> bool:
+        return (
+            self._stats["ai_enabled"]
+            and self._latest_result_generation == self._source_generation
+            and self._latest_result_at > 0.0
+        )
 
     def _save_frame(self, frame: Any, frame_index: int) -> None:
         if self._writer is None:
@@ -372,10 +513,7 @@ class PipelineController:
             status["camera_ai_fps"] = config.CAMERA_AI_FPS
             status["camera_width"] = config.CAMERA_WIDTH
             status["camera_height"] = config.CAMERA_HEIGHT
-            result_is_current = (
-                self._latest_result_generation == self._source_generation
-                and time.monotonic() - self._latest_result_at <= 1.0
-            )
+            result_is_current = self._has_current_ai_result()
             status["overlay_boxes"] = (
                 [dict(item) for item in self._latest_detections + self._latest_candidates]
                 if result_is_current
@@ -385,14 +523,13 @@ class PipelineController:
             status["show_candidates"] = self.show_candidates
             status["show_confidence"] = self.show_confidence
             status["show_ids"] = self.show_ids
+            status["target_lock"] = self._target_lock.status()
+            status["approach"] = None if self._stats.get("approach") is None else dict(self._stats["approach"])
             return status
 
     def get_overlay_status(self) -> dict[str, Any]:
         with self._lock:
-            result_is_current = (
-                self._latest_result_generation == self._source_generation
-                and time.monotonic() - self._latest_result_at <= 1.0
-            )
+            result_is_current = self._has_current_ai_result()
             boxes = self._latest_detections + (self._latest_candidates if self.show_candidates else [])
             return {
                 "version": self._latest_result_version,
@@ -400,6 +537,7 @@ class PipelineController:
                 "show_candidates": self.show_candidates,
                 "show_confidence": self.show_confidence,
                 "show_ids": self.show_ids,
+                "target_lock": self._target_lock.status(),
             }
 
     def _source_label(self) -> str:
@@ -452,6 +590,14 @@ class PipelineController:
                 self._stats["error"] = None
             if not enabled:
                 self._pending_ai_frame = None
+                self._latest_detections = []
+                self._latest_candidates = []
+                self._latest_result_at = 0.0
+                self._latest_result_generation = -1
+                self._latest_result_version += 1
+                self._target_lock.clear()
+                self._approach.reset()
+                self._stats.update(targets=0, candidates=0, approach=None)
             self._ai_condition.notify_all()
         self._wake_worker.set()
 
@@ -464,6 +610,33 @@ class PipelineController:
             if "show_ids" in options:
                 self.show_ids = options["show_ids"]
 
+    def toggle_target_lock(self) -> bool:
+        with self._lock:
+            if self._target_lock.locked:
+                released = self._target_lock.toggle([])
+                self._approach.reset()
+                self._stats["approach"] = None
+                return released
+            if not self._has_current_ai_result() or not self._latest_detections:
+                return False
+            return self._target_lock.toggle(self._latest_detections)
+
+    def cycle_target_lock(self) -> bool:
+        with self._lock:
+            if not self._has_current_ai_result():
+                return False
+            cycled = self._target_lock.cycle(self._latest_detections)
+            if cycled:
+                self._approach.reset()
+            return cycled
+
+    def set_target_lock_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._target_lock.set_enabled(enabled)
+            if not enabled:
+                self._approach.reset()
+                self._stats["approach"] = None
+
     def close(self) -> None:
         self._shutdown.set()
         with self._ai_condition:
@@ -475,3 +648,5 @@ class PipelineController:
             self._worker.join(timeout=3.0)
         if self._ai_worker and self._ai_worker.is_alive():
             self._ai_worker.join(timeout=3.0)
+        if self._mavlink_worker and self._mavlink_worker.is_alive():
+            self._mavlink_worker.join(timeout=3.0)

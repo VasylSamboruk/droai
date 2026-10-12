@@ -5,6 +5,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from NEW.target_lock import TargetLock
+
 
 class Overlay:
     def __init__(self, thickness: int = 2, smoothing: float = 0.7, show_fps: bool = True) -> None:
@@ -24,6 +26,7 @@ class Overlay:
         stats: dict[str, Any],
         show_candidates: bool = False,
         minimal_hud: bool = False,
+        target_lock: dict[str, Any] | None = None,
     ) -> np.ndarray:
         output = frame.copy()
         for detection in detections:
@@ -47,18 +50,63 @@ class Overlay:
                     not minimal_hud,
                 )
 
+        if target_lock is not None:
+            TargetLock.draw_locked_overlay(output, frame, target_lock, self.thickness)
+
         if minimal_hud:
-            lines = [f"FPS {stats.get('video_fps', 0):.0f}   MATCHES {len(detections)}"]
+            lock_status = stats.get("target_lock_status", {})
+            if not lock_status.get("enabled", True):
+                lock_label = "LOCK OFF"
+            elif target_lock is not None:
+                lock_label = f"LOCK #{target_lock['track_id']}" if target_lock.get("track_id") is not None else "LOCK ON"
+            else:
+                lock_label = "LOCK READY"
+            lines = [f"FPS {stats.get('video_fps', 0):.0f}   MATCHES {len(detections)}   {lock_label}"]
+            approach = stats.get("approach") or {}
+            if approach.get("range_m") is not None:
+                tx_state = str((stats.get("approach_tx") or {}).get("state") or "")
+                tx_label = f"  TX {tx_state.upper()}" if tx_state and tx_state != "idle" else ""
+                lines.append(
+                    f"RNG {approach['range_m']:.1f}m  VX {approach['forward_m_s']:+.2f}  {str(approach.get('state', '')).upper()}{tx_label}"
+                )
+                tx = stats.get("approach_tx") or {}
+                if tx.get("roll_pwm") is not None:
+                    lines.append(
+                        f"ACRO R{tx['roll_pwm']} P{tx['pitch_pwm']} Y{tx['yaw_pwm']} T{tx['throttle_pwm']}"
+                    )
+                acro = tx.get("acro") or {}
+                if acro.get("pitch_compensation_active"):
+                    view_state = "IN VIEW" if acro.get("target_in_view") else "OUT OF VIEW"
+                    lines.append(f"PITCH COMP {view_state}")
         else:
             lines = [
                 f"TARGETS {len(detections)}   CANDIDATES {len(candidates)}   ROI CHECKS {stats.get('candidate_checks', 0)}"
             ]
             if self.show_fps:
                 lines[:0] = [f"VIDEO {stats.get('video_fps', 0):.1f} FPS", f"AI {stats.get('ai_fps', 0):.1f} FPS"]
+            approach = stats.get("approach") or {}
+            if approach.get("range_m") is not None:
+                tx_state = str((stats.get("approach_tx") or {}).get("state") or "")
+                tx_label = f"  TX {tx_state.upper()}" if tx_state and tx_state != "idle" else ""
+                lines.append(
+                    f"RNG {approach['range_m']:.1f}m  VX {approach['forward_m_s']:+.2f}  {str(approach.get('state', '')).upper()}{tx_label}"
+                )
+                tx = stats.get("approach_tx") or {}
+                if tx.get("roll_pwm") is not None:
+                    lines.append(
+                        f"ACRO R{tx['roll_pwm']} P{tx['pitch_pwm']} Y{tx['yaw_pwm']} T{tx['throttle_pwm']}"
+                    )
+                acro = tx.get("acro") or {}
+                if acro.get("pitch_compensation_active"):
+                    view_state = "IN VIEW" if acro.get("target_in_view") else "OUT OF VIEW"
+                    lines.append(f"PITCH COMP {view_state}")
         for row, text in enumerate(lines):
             y = 28 + row * 24
             cv2.putText(output, text, (16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 0, 0), 4, cv2.LINE_AA)
             cv2.putText(output, text, (16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (235, 242, 238), 1, cv2.LINE_AA)
+        if target_lock is None and minimal_hud and detections:
+            inset_target = max(detections, key=lambda item: item["confidence"])
+            TargetLock.draw_inset(output, inset_target, source_frame=frame)
         return output
 
     def _smooth(self, detection: dict[str, Any]) -> dict[str, Any]:

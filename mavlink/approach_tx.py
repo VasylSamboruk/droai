@@ -115,7 +115,7 @@ class ApproachCommander:
             if self._mode == "acro"
             else guided_custom_mode(telemetry_status.get("autopilot"))
         )
-        if restore is None or restore == engaged_mode:
+        if restore is None:
             restore = int(config.MAVLINK_APPROACH_HOLD_MODE)
         self._telemetry.send_set_mode(restore)
         self._engaged = False

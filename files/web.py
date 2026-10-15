@@ -4,6 +4,7 @@ from typing import Any
 
 from flask import Flask, Response, jsonify, render_template, request
 
+import config
 from files.pipeline import PipelineController
 
 
@@ -13,6 +14,11 @@ def create_app(controller: PipelineController) -> Flask:
 
     @app.get("/")
     def index() -> str:
+        template = "video.html" if config.WEB_VIEW_MODE == "video" else "index.html"
+        return render_template(template)
+
+    @app.get("/dashboard")
+    def dashboard() -> str:
         return render_template("index.html")
 
     @app.get("/api/status")

@@ -10,8 +10,9 @@ class TargetLock:
     INSET_SIZE = (240, 150)
     INSET_MARGIN = 12
 
-    def __init__(self) -> None:
+    def __init__(self, flow_scale: float = 0.5) -> None:
         self.enabled = True
+        self._flow_scale = min(1.0, max(0.25, float(flow_scale)))
         self._target: dict[str, Any] | None = None
         self._box: list[float] | None = None
         self._previous_gray: np.ndarray | None = None
@@ -86,6 +87,14 @@ class TargetLock:
             return None
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if self._flow_scale < 1.0:
+            gray = cv2.resize(
+                gray,
+                None,
+                fx=self._flow_scale,
+                fy=self._flow_scale,
+                interpolation=cv2.INTER_AREA,
+            )
         if self._needs_initialization:
             self._refresh_points(gray)
             self._needs_initialization = False
@@ -94,10 +103,17 @@ class TargetLock:
             if detection_version != self._last_detection_version:
                 matched = self._find_matching_detection(detections)
                 if matched is not None:
+                    previous_track_id = self._target.get("track_id")
                     self._target.update(
                         {key: matched[key] for key in ("class", "confidence") if key in matched}
                     )
-                    if not flow_succeeded or self._box_outside_frame(self._box, frame.shape):
+                    if "track_id" in matched:
+                        self._target["track_id"] = matched["track_id"]
+                    if (
+                        not flow_succeeded
+                        or matched.get("track_id") != previous_track_id
+                        or self._box_outside_frame(self._box, frame.shape)
+                    ):
                         self._box = [float(value) for value in matched["box"]]
                         self._refresh_points(gray)
                 self._last_detection_version = detection_version
@@ -260,10 +276,12 @@ class TargetLock:
             return None
         target_id = self._target.get("track_id")
         if target_id is not None:
-            return next(
+            exact_match = next(
                 (item for item in detections if item.get("track_id") == target_id),
                 None,
             )
+            if exact_match is not None:
+                return exact_match
 
         same_class = [
             item for item in detections if item.get("class") == self._target.get("class")
@@ -271,7 +289,30 @@ class TargetLock:
         if not same_class or self._box is None:
             return None
         target_center = self._center(self._box)
-        return min(same_class, key=lambda item: self._distance(target_center, item["box"]))
+        target_width = max(1.0, self._box[2] - self._box[0])
+        target_height = max(1.0, self._box[3] - self._box[1])
+        max_distance = max(48.0, float(np.hypot(target_width, target_height)) * 1.5)
+        max_distance += min(self._lost_frames * 3.0, 240.0)
+        nearby = [
+            item for item in same_class
+            if self._distance(target_center, item["box"]) <= max_distance
+            or self._intersection_over_union(self._box, item["box"]) >= 0.05
+        ]
+        if not nearby:
+            return None
+        return min(nearby, key=lambda item: self._distance(target_center, item["box"]))
+
+    @staticmethod
+    def _intersection_over_union(first: list[float], second: list[float]) -> float:
+        left = max(first[0], second[0])
+        top = max(first[1], second[1])
+        right = min(first[2], second[2])
+        bottom = min(first[3], second[3])
+        intersection = max(0.0, right - left) * max(0.0, bottom - top)
+        first_area = max(0.0, first[2] - first[0]) * max(0.0, first[3] - first[1])
+        second_area = max(0.0, second[2] - second[0]) * max(0.0, second[3] - second[1])
+        union = first_area + second_area - intersection
+        return intersection / union if union else 0.0
 
     def _follow_flow(self, gray: np.ndarray) -> bool:
         if self._previous_gray is None or self._points is None or len(self._points) < 3:
@@ -301,10 +342,10 @@ class TargetLock:
 
         displacement = np.median(new_points - old_points, axis=0)
         self._box = [
-            self._box[0] + float(displacement[0]),
-            self._box[1] + float(displacement[1]),
-            self._box[2] + float(displacement[0]),
-            self._box[3] + float(displacement[1]),
+            self._box[0] + float(displacement[0]) / self._flow_scale,
+            self._box[1] + float(displacement[1]) / self._flow_scale,
+            self._box[2] + float(displacement[0]) / self._flow_scale,
+            self._box[3] + float(displacement[1]) / self._flow_scale,
         ]
         self._points = new_points.reshape(-1, 1, 2)
         self._lost_frames = 0
@@ -318,6 +359,10 @@ class TargetLock:
             return
         height, width = gray.shape
         left, top, right, bottom = self._box
+        left *= self._flow_scale
+        top *= self._flow_scale
+        right *= self._flow_scale
+        bottom *= self._flow_scale
         box_width = max(1.0, right - left)
         box_height = max(1.0, bottom - top)
         margin_x = box_width * 0.12

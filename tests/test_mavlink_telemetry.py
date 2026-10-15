@@ -174,6 +174,30 @@ class MAVLinkTelemetryTests(unittest.TestCase):
 
         telemetry.close()
 
+    def test_unconfigured_fix_mode_uses_target_lock_switch_and_threshold(self) -> None:
+        connection = FakeConnection([
+            FakeMessage("RC_CHANNELS", chan8_raw=1800),
+            FakeMessage("RC_CHANNELS", chan8_raw=1000),
+            FakeMessage("RC_CHANNELS", chan8_raw=65535),
+        ])
+        telemetry = MAVLinkTelemetry(connection_factory=lambda *_args, **_kwargs: connection)
+        telemetry.connect()
+
+        with (
+            patch.object(config, "MAVLINK_FIX_MODE_CHANNEL", 0),
+            patch.object(config, "MAVLINK_FIX_MODE_PWM_US", 0),
+            patch.object(config, "MAVLINK_TARGET_LOCK_CHANNEL", 8),
+            patch.object(config, "MAVLINK_RC_SWITCH_THRESHOLD_US", 1500),
+        ):
+            self.assertTrue(telemetry.poll())
+            self.assertTrue(telemetry.status()["fix_mode_active"])
+            self.assertTrue(telemetry.poll())
+            self.assertFalse(telemetry.status()["fix_mode_active"])
+            self.assertTrue(telemetry.poll())
+            self.assertIsNone(telemetry.status()["fix_mode_active"])
+
+        telemetry.close()
+
     def test_fix_mode_becomes_unknown_when_rc_messages_are_stale(self) -> None:
         connection = FakeConnection([
             FakeMessage("RC_CHANNELS", chan10_raw=1800),

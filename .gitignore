@@ -12,5 +12,7 @@ models/*
 !models/yolo26n.pt
 !models/best_ncnn_model/
 !models/best_ncnn_model/**
+!models/yolo26n_ncnn_model/
+!models/yolo26n_ncnn_model/**
 models/best_ncnn_model/**/__pycache__/
 models/best_ncnn_model/**/__pycache__/**

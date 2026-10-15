@@ -134,7 +134,6 @@ class VideoSource:
             try:
                 if self._picamera is not None:
                     frame = self._picamera.capture_array()
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                     ok = frame is not None
                 else:
                     capture = self._capture

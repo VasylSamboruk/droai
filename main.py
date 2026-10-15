@@ -2,17 +2,27 @@ import atexit
 import os
 import threading
 
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
+import config
+
+if config.VIDEO_OUTPUT in {"vtx", "both"}:
+    # Set the local X session before importing OpenCV's Qt backend.
+    os.environ["DISPLAY"] = config.VTX_DISPLAY
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    os.environ.setdefault("QT_LOGGING_RULES", "qt.text.font.*=false;*.warning=false")
+
 import cv2
 from werkzeug.serving import make_server
 
 from files.pipeline import PipelineController
 from files.web import create_app
-import config
 
 
 def show_vtx_output(controller: PipelineController) -> None:
-    os.environ.setdefault("DISPLAY", ":0")
-    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
     window_name = "Drone AI VTX"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)

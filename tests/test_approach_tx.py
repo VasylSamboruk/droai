@@ -57,6 +57,22 @@ class ApproachTxTests(unittest.TestCase):
         telemetry.poll()
         return telemetry, connection.mav
 
+    def test_disabled_transmission_does_not_send_flight_commands(self) -> None:
+        telemetry, mav = self._telemetry()
+        commander = ApproachCommander(telemetry)
+
+        with patch("config.MAVLINK_APPROACH_TX", False):
+            status = commander.update(
+                active=True,
+                setpoint=body_ned_velocity_target(1.0, 0.0, 0.0),
+                telemetry_status={**telemetry.status(), "fix_mode_active": True},
+                now=5.0,
+            )
+
+        self.assertEqual(status["state"], "idle")
+        self.assertFalse(status["engaged"])
+        self.assertEqual(mav.calls, [])
+
     def test_lock_switches_guided_and_streams_body_velocity(self) -> None:
         telemetry, mav = self._telemetry()
         commander = ApproachCommander(telemetry)
@@ -188,6 +204,31 @@ class ApproachTxTests(unittest.TestCase):
         self.assertEqual(mav.calls[0][1][3], 0)
         self.assertEqual(mav.calls[1][0], "set_mode")
         self.assertEqual(mav.calls[1][1][2], 5)
+
+    def test_acro_unlock_preserves_previous_acro_mode(self) -> None:
+        telemetry, mav = self._telemetry(custom_mode=2)
+        commander = ApproachCommander(telemetry)
+        with patch("config.APPROACH_CONTROL_MODE", "acro"), patch(
+            "config.MAVLINK_APPROACH_TX", True
+        ), patch("config.FIX_RC_LOSS_CLEAR_OVERRIDE_BURSTS", 1):
+            commander.update(
+                active=True,
+                setpoint=None,
+                telemetry_status={**telemetry.status(), "fix_mode_active": True},
+                now=5.0,
+                guidance={"coord_x": 0.0, "coord_y": 0.0, "hold": True},
+            )
+            mav.calls.clear()
+            commander.update(
+                active=False,
+                setpoint=None,
+                telemetry_status={**telemetry.status(), "fix_mode_active": True},
+                now=5.2,
+            )
+
+        mode_calls = [call for call in mav.calls if call[0] == "set_mode"]
+        self.assertEqual(len(mode_calls), 1)
+        self.assertEqual(mode_calls[0][1][2], 2)
 
     def test_rc_loss_while_acro_sends_rtl(self) -> None:
         telemetry, mav = self._telemetry()

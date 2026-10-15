@@ -2,7 +2,8 @@
 
 This folder receives vehicle telemetry on a configured MAVLink link. Channel 8
 still toggles the video target lock. While that lock is active, the main app can
-also take flight control for visual approach. Default `APPROACH_CONTROL_MODE=acro`
+also take flight control for visual approach, but command transmission is
+disabled by default (`MAVLINK_APPROACH_TX=0`). Default `APPROACH_CONTROL_MODE=acro`
 switches ACRO and streams `RC_CHANNELS_OVERRIDE` from the FIX PID (frame error →
 sticks, optional RTL on RC loss). Set `guided` to keep SET_POSITION_TARGET_LOCAL_NED
 velocity instead. The standalone `python -m mavlink.telemetry` monitor remains
@@ -10,16 +11,16 @@ receive-only and does not arm or change RC mapping.
 
 ## Configuration
 
-Set these values in `config.py` or through environment variables:
+Set these values in `config_mavlink.py` or through environment variables:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `MAVLINK_ENABLED` | `0` | Explicitly enable MAVLink reception in the app or standalone receiver. |
-| `MAVLINK_CONNECTION` | `udpin:0.0.0.0:14550` | Select the incoming MAVLink transport/endpoint. This is not an RC channel. |
-| `MAVLINK_BAUD` | `57600` | Serial baud rate; ignored by UDP transports. |
+| `MAVLINK_ENABLED` | `1` | Enable MAVLink reception in the app. |
+| `MAVLINK_CONNECTION` | `/dev/ttyAMA0` on Raspberry Pi 5 GPIO14/15; `udpin:0.0.0.0:14550` on PC | Select the incoming MAVLink transport/endpoint. This is not an RC channel. |
+| `MAVLINK_BAUD` | `57600` | UART/serial baud rate; ignored by UDP transports. Must match the flight-controller port. |
 | `MAVLINK_HEARTBEAT_TIMEOUT` | `3.0` | Seconds before status reports a heartbeat as disconnected. |
-| `MAVLINK_TARGET_LOCK_CHANNEL` | `8` | Hold switch: ON locks and can fly at the target; OFF unlocks and returns RC. |
-| `MAVLINK_APPROACH_TX` | `1` | Take control while lock + channel 8 are active. |
+| `MAVLINK_TARGET_LOCK_CHANNEL` | `8` | Hold switch: ON locks the target; OFF unlocks it. |
+| `MAVLINK_APPROACH_TX` | `0` | Explicitly enable flight commands while lock + channel 8 are active. Leave `0` for lock/telemetry-only operation. |
 | `APPROACH_CONTROL_MODE` | `acro` | `acro` = RC override + FIX PID; `guided` = body-NED velocity. |
 | `APPROACH_ACRO_GEOMETRY` | `copter` | `copter` = camera forward; `rocket` = steep-dive FIX mapping. |
 | `APPROACH_PITCH_COMPENSATION_ENABLED` | `0` | Opt-in fixed-camera pitch compensation; bench-calibrate before enabling. |
@@ -33,8 +34,8 @@ Set these values in `config.py` or through environment variables:
 | `MAVLINK_APPROACH_HOLD_MODE` | `5` | Mode to restore if the previous mode is unknown (ArduCopter LOITER). |
 | `MAVLINK_TARGET_CYCLE_CHANNEL` | `9` | RC channel used to cycle to the next locked target. |
 | `MAVLINK_RC_SWITCH_THRESHOLD_US` | `1500` | RC PWM threshold separating switch-off and switch-on. |
-| `MAVLINK_FIX_MODE_CHANNEL` | `0` | RC channel used only to report FIX mode; `0` disables this inference. |
-| `MAVLINK_FIX_MODE_PWM_US` | `0` | PWM position that represents FIX; `0` leaves FIX state unknown. |
+| `MAVLINK_FIX_MODE_CHANNEL` | `0` | FIX interlock channel; `0` reuses the target-lock channel (8 by default). |
+| `MAVLINK_FIX_MODE_PWM_US` | `0` | Expected FIX-on PWM; `0` treats values above `MAVLINK_RC_SWITCH_THRESHOLD_US` as ON. |
 | `MAVLINK_FIX_MODE_PWM_TOLERANCE_US` | `100` | Allowed difference from the configured FIX PWM position. |
 
 Examples for Windows PowerShell:
@@ -65,6 +66,23 @@ The switch-on value is above `MAVLINK_RC_SWITCH_THRESHOLD_US`, and switch-off
 must be at or below it. Each action occurs once per switch-on, not continuously
 while the switch remains high.
 
+### Raspberry Pi UART wiring
+
+For receive-only RC switch testing, connect the flight controller UART `TX` to
+Raspberry Pi `GPIO15/RXD` (physical pin 10), and connect the grounds (for example,
+flight-controller `GND` to Pi physical pin 6). This is one UART link; the Pi RX
+pin is the only signal pin needed to receive. Do not connect the Pi `5V` pin to
+the flight controller UART. Confirm the controller's UART TX logic level is 3.3 V
+before connecting directly; use a level shifter if it is 5 V. Enable the Pi
+hardware serial port and disable its serial login console, then set
+`MAVLINK_CONNECTION=/dev/ttyAMA0` for the Pi 5 GPIO14/15 UART and set
+`MAVLINK_BAUD` to the flight-controller port's configured baud rate. On some
+systems `/dev/serial0` may resolve to a different UART, so verify its target
+before using it. Configure the flight-controller port to transmit MAVLink
+messages including `RC_CHANNELS`. Leave `MAVLINK_APPROACH_TX=0` for lock-only
+testing; the Crossfire receiver remains connected to and controls the flight
+controller directly.
+
 ## Received status
 
 The JSON status stream reports heartbeat age, system/component IDs, armed flag,
@@ -89,12 +107,11 @@ The dashboard's **Target lock** checkbox (T) enables or disables local visual
 tracking. **Lock target** (Q) locks the highest-confidence detection or releases
 the current lock; W cycles to another confirmed track ID. For browser webcam
 input, the locked box is drawn red in the local video overlay. Channel 8 is a
-hold switch: ON locks the target and, with `MAVLINK_APPROACH_TX=1`, flies at it
-in GUIDED/Offboard; OFF unlocks and restores the previous flight mode so you
-have the sticks again. Commands are additionally gated by armed state and (by
-default) a fresh, configured FIX switch reported in `RC_CHANNELS`. Set
-`MAVLINK_APPROACH_TX=0` to keep lock but never send flight commands. This does
-not arm the vehicle. Releasing an RC override sends zero PWM values for the
+hold switch: ON locks the target and, only with `MAVLINK_APPROACH_TX=1`, enables
+the configured flight-control path; OFF unlocks it. Flight commands are disabled
+by default. When explicitly enabled, commands are additionally gated by armed
+state and (by default) a fresh, configured FIX switch reported in `RC_CHANNELS`.
+This does not arm the vehicle. Releasing an RC override sends zero PWM values for the
 override channels; `65535` is reserved for ignoring a channel, not releasing it.
 
 ## Standalone usage

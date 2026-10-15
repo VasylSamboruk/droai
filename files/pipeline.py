@@ -11,6 +11,7 @@ import config
 from files.ai import YOLODetector
 from files.browser_video import BrowserVideoSource
 from files.candidate import CandidateManager
+from files.event_logger import DetectionEventLogger
 from files.overlay import Overlay
 from files.tracker import BoTSORTTracker
 from files.utils import FPSCounter
@@ -45,6 +46,7 @@ class PipelineController:
         self._latest_detections: list[dict[str, Any]] = []
         self._latest_candidates: list[dict[str, Any]] = []
         self._latest_result_at = 0.0
+        self._result_max_age = max(2.0, 3.0 / max(float(config.CAMERA_AI_FPS), 1.0))
         self._latest_result_version = 0
         self._jpeg: bytes | None = None
         self._jpeg_version = 0
@@ -52,13 +54,16 @@ class PipelineController:
         self._display_version = 0
         self._latest_frame_index = -1
         self._processed_frame_count = 0
+        self._next_ai_frame_at = 0.0
         self._video_fps = FPSCounter()
         self._ai_fps = FPSCounter()
+        self._event_logger = DetectionEventLogger(config.LOG_DIRECTORY)
         self._detector: YOLODetector | None = None
         self._tracker: BoTSORTTracker | None = None
         self._candidates = self._new_candidate_manager()
-        self._overlay = Overlay(config.BOX_THICKNESS, config.BOX_SMOOTHING, config.SHOW_FPS)
-        self._target_lock = TargetLock()
+        smoothing = config.BOX_SMOOTHING if config.TRACKING_STABILITY_ENABLED else 0.70
+        self._overlay = Overlay(config.BOX_THICKNESS, smoothing, config.SHOW_FPS)
+        self._target_lock = TargetLock(config.LOCK_FLOW_SCALE)
         self._approach = ApproachHoldController()
         self._mavlink_telemetry = MAVLinkTelemetry() if config.MAVLINK_ENABLED else None
         self._rc_lock_switch_active: bool | None = None
@@ -256,6 +261,7 @@ class PipelineController:
                         self._writer = None
                     self._last_written_index = -1
                     self._processed_frame_count = 0
+                    self._next_ai_frame_at = 0.0
                     last_frame_index = -1
                     source_started = False
 
@@ -294,11 +300,11 @@ class PipelineController:
                 video_fps = self._video_fps.tick()
                 with self._ai_condition:
                     generation = self._source_generation
-                    if self._stats["ai_enabled"]:
-                        self._pending_ai_frame = (generation, frame_index, frame.copy())
+                    if self._stats["ai_enabled"] and self._should_schedule_ai_frame():
+                        self._pending_ai_frame = (generation, frame_index, frame)
                         self._ai_condition.notify()
 
-                    result_is_current = self._has_current_ai_result()
+                    result_is_current = self._has_fresh_ai_result()
                     detections = list(self._latest_detections) if result_is_current else []
                     candidates = list(self._latest_candidates) if result_is_current else []
                     stats = {
@@ -345,7 +351,10 @@ class PipelineController:
                     candidates,
                     stats,
                     show_candidates,
-                    minimal_hud=config.VIDEO_OUTPUT in {"vtx", "both"},
+                    minimal_hud=(
+                        config.VIDEO_OUTPUT in {"vtx", "both"}
+                        or (config.VIDEO_OUTPUT == "web" and config.WEB_VIEW_MODE == "video")
+                    ),
                     target_lock=target_lock,
                 )
                 with self._display_ready:
@@ -355,7 +364,7 @@ class PipelineController:
                 if self._record_output_enabled():
                     self._save_frame(output, frame_index)
                 if self.source.source_type != "webcam" and config.VIDEO_OUTPUT in {"web", "both"}:
-                    encoded, buffer = cv2.imencode(".jpg", output, [cv2.IMWRITE_JPEG_QUALITY, 82])
+                    encoded, buffer = cv2.imencode(".jpg", output, [cv2.IMWRITE_JPEG_QUALITY, config.WEB_JPEG_QUALITY])
                 else:
                     encoded, buffer = False, None
                 if encoded:
@@ -371,7 +380,27 @@ class PipelineController:
             with self._lock:
                 self._stats["running"] = False
 
+    def _should_schedule_ai_frame(self) -> bool:
+        if self.source.source_type == "file":
+            return True
+        target_fps = max(float(config.CAMERA_AI_FPS), 0.0)
+        if target_fps <= 0.0:
+            return True
+        now = time.monotonic()
+        if now < self._next_ai_frame_at:
+            return False
+        self._next_ai_frame_at = now + (1.0 / target_fps)
+        return True
+
     def _run_ai(self) -> None:
+        cv2.setNumThreads(config.OPENCV_NUM_THREADS)
+        try:
+            import torch
+
+            torch.set_num_threads(config.AI_CPU_THREADS)
+        except ImportError:
+            pass
+
         detector: YOLODetector | None = None
         tracker: BoTSORTTracker | None = None
         candidate_manager = self._new_candidate_manager()
@@ -410,19 +439,30 @@ class PipelineController:
                         self._stats["model_loaded"] = True
 
                 if tracker is None:
+                    tracker_settings = {
+                        "gmc_method": config.GMC_METHOD,
+                        "with_reid": config.REID_ENABLED,
+                    }
+                    if config.TRACKING_STABILITY_ENABLED:
+                        tracker_settings.update({
+                            "track_buffer": config.TRACK_BUFFER,
+                            "track_high_thresh": config.TRACK_HIGH_THRESH,
+                            "track_low_thresh": config.TRACK_LOW_THRESH,
+                            "new_track_thresh": config.TRACK_NEW_THRESH,
+                        })
+                    else:
+                        tracker_settings.update({
+                            "track_buffer": 30,
+                            "track_high_thresh": 0.05,
+                            "track_low_thresh": 0.01,
+                            "new_track_thresh": 0.05,
+                        })
                     tracker = BoTSORTTracker(
                         detector,
                         config.AI_CONFIDENCE,
                         config.AI_IMAGE_SIZE,
                         config.PROJECT_ROOT,
-                        {
-                            "track_buffer": config.TRACK_BUFFER,
-                            "track_high_thresh": config.TRACK_HIGH_THRESH,
-                            "track_low_thresh": config.TRACK_LOW_THRESH,
-                            "new_track_thresh": config.TRACK_NEW_THRESH,
-                            "gmc_method": config.GMC_METHOD,
-                            "with_reid": config.REID_ENABLED,
-                        },
+                        tracker_settings,
                     )
                     with self._lock:
                         self._tracker = tracker
@@ -437,6 +477,7 @@ class PipelineController:
                     detector.check_crop,
                 )
                 ai_fps = self._ai_fps.tick()
+                inference_ms = (time.perf_counter() - started_at) * 1000
                 with self._lock:
                     if generation != self._source_generation or not self._stats["ai_enabled"]:
                         continue
@@ -451,13 +492,25 @@ class PipelineController:
                         targets=len(detections),
                         candidates=len(candidates),
                         candidate_checks=candidate_manager.total_checks,
-                        ai_latency_ms=(time.perf_counter() - started_at) * 1000,
+                        ai_latency_ms=inference_ms,
                         error=None,
                     )
+                self._event_logger.log_inference(
+                    frame_index=frame_index,
+                    detections=detections,
+                    candidates=candidates,
+                    inference_ms=inference_ms,
+                    ai_fps=ai_fps,
+                    model=Path(config.MODEL_PATH).name,
+                )
             except Exception as error:
                 with self._lock:
                     if generation != self._source_generation:
                         continue
+                    self._latest_detections = []
+                    self._latest_candidates = []
+                    self._latest_result_at = 0.0
+                    self._latest_result_version += 1
                     if detector is None:
                         self._stats["ai_enabled"] = False
                     self._latest_detections = []
@@ -467,12 +520,19 @@ class PipelineController:
                     self._stats["model_loaded"] = detector is not None
                     self._stats.update(targets=0, candidates=0)
                     self._stats["error"] = f"Inference: {error}"
+                self._event_logger.log_error(str(error), frame_index=frame_index)
 
     def _has_current_ai_result(self) -> bool:
         return (
             self._stats["ai_enabled"]
             and self._latest_result_generation == self._source_generation
             and self._latest_result_at > 0.0
+        )
+
+    def _has_fresh_ai_result(self) -> bool:
+        return (
+            self._has_current_ai_result()
+            and time.monotonic() - self._latest_result_at <= self._result_max_age
         )
 
     def _save_frame(self, frame: Any, frame_index: int) -> None:
@@ -513,7 +573,7 @@ class PipelineController:
             status["camera_ai_fps"] = config.CAMERA_AI_FPS
             status["camera_width"] = config.CAMERA_WIDTH
             status["camera_height"] = config.CAMERA_HEIGHT
-            result_is_current = self._has_current_ai_result()
+            result_is_current = self._has_fresh_ai_result()
             status["overlay_boxes"] = (
                 [dict(item) for item in self._latest_detections + self._latest_candidates]
                 if result_is_current
@@ -529,7 +589,10 @@ class PipelineController:
 
     def get_overlay_status(self) -> dict[str, Any]:
         with self._lock:
-            result_is_current = self._has_current_ai_result()
+            result_is_current = (
+                self._has_fresh_ai_result()
+                and time.monotonic() - self._latest_result_at <= 1.0
+            )
             boxes = self._latest_detections + (self._latest_candidates if self.show_candidates else [])
             return {
                 "version": self._latest_result_version,

@@ -258,14 +258,23 @@ class MAVLinkTelemetry:
             ):
                 self._state[state_key] = rc_channels.get(str(channel))
 
-            fix_channel = config.MAVLINK_FIX_MODE_CHANNEL
-            fix_pwm = config.MAVLINK_FIX_MODE_PWM_US
-            fix_raw = rc_channels.get(str(fix_channel)) if fix_channel else None
-            self._state["fix_mode_active"] = (
-                None
-                if fix_raw is None or not fix_pwm
-                else abs(fix_raw - fix_pwm) <= config.MAVLINK_FIX_MODE_PWM_TOLERANCE_US
+            fix_channel = (
+                config.MAVLINK_FIX_MODE_CHANNEL
+                or config.MAVLINK_TARGET_LOCK_CHANNEL
             )
+            fix_pwm = config.MAVLINK_FIX_MODE_PWM_US
+            fix_raw = rc_channels.get(str(fix_channel))
+            if fix_raw is None:
+                self._state["fix_mode_active"] = None
+            elif fix_pwm:
+                self._state["fix_mode_active"] = (
+                    abs(fix_raw - fix_pwm)
+                    <= config.MAVLINK_FIX_MODE_PWM_TOLERANCE_US
+                )
+            else:
+                self._state["fix_mode_active"] = (
+                    fix_raw > config.MAVLINK_RC_SWITCH_THRESHOLD_US
+                )
 
         return True
 

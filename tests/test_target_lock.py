@@ -254,6 +254,46 @@ class TargetLockTests(unittest.TestCase):
         self.assertEqual(tracked["box"], detection["box"])
         self.assertTrue(lock.locked)
 
+    def test_lock_reacquires_nearby_same_class_detection_with_new_track_id(self) -> None:
+        frame = np.zeros((140, 180, 3), dtype=np.uint8)
+        original = {"class": "car", "confidence": 0.9, "box": [40, 30, 100, 80], "track_id": 5}
+        reacquired = {"class": "car", "confidence": 0.82, "box": [54, 34, 114, 84], "track_id": 11}
+        lock = TargetLock()
+        lock.toggle([original])
+        lock.update(frame, [original], 1)
+
+        tracked = lock.update(frame, [reacquired], 2)
+
+        self.assertIsNotNone(tracked)
+        self.assertEqual(tracked["track_id"], 11)
+        self.assertEqual(tracked["box"], reacquired["box"])
+
+    def test_lock_does_not_jump_to_distant_same_class_detection(self) -> None:
+        frame = np.zeros((140, 320, 3), dtype=np.uint8)
+        original = {"class": "car", "confidence": 0.9, "box": [40, 30, 100, 80], "track_id": 5}
+        other = {"class": "car", "confidence": 0.95, "box": [220, 30, 280, 80], "track_id": 11}
+        lock = TargetLock()
+        lock.toggle([original])
+        lock.update(frame, [original], 1)
+
+        tracked = lock.update(frame, [other], 2)
+
+        self.assertIsNotNone(tracked)
+        self.assertEqual(tracked["track_id"], 5)
+        self.assertEqual(tracked["box"], original["box"])
+
+    def test_overlay_draws_locked_detection_only_once(self) -> None:
+        frame = np.zeros((180, 240, 3), dtype=np.uint8)
+        locked = {"class": "car", "confidence": 0.9, "box": [40, 40, 110, 100], "track_id": 5}
+        other = {"class": "bus", "confidence": 0.8, "box": [140, 40, 210, 100], "track_id": 8}
+
+        output = Overlay().draw(frame, [locked, other], [], {}, target_lock=locked)
+
+        self.assertTrue(np.array_equal(output[80, 40], np.array([0, 0, 255], dtype=np.uint8)))
+        green_edge = output[100, 175]
+        self.assertGreater(int(green_edge[1]), int(green_edge[0]))
+        self.assertGreater(int(green_edge[1]), int(green_edge[2]))
+
 
 class WebLockRouteTests(unittest.TestCase):
     class Controller:

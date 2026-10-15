@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <title>Drone AI | Live video</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
+      img { display: block; width: 100vw; height: 100vh; height: 100dvh; object-fit: contain; }
+    </style>
+  </head>
+  <body>
+    <img src="{{ url_for('video_feed') }}" alt="Live camera with tracking overlay" />
+  </body>
+</html>
